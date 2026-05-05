@@ -1,12 +1,9 @@
-// SPDX-FileCopyrightText: Copyright (c) 2011-2023, NVIDIA CORPORATION. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2011-2026, NVIDIA CORPORATION. All rights reserved.
 // SPDX-License-Identifier: BSD-3
 
 #pragma once
 
 #include <cub/device/device_reduce.cuh>
-
-#include <cuda/__device/all_devices.h>
-#include <cuda/__memory_pool/device_memory_pool.h>
 
 #include <nvbench_helper.cuh>
 
@@ -29,11 +26,10 @@ struct policy_selector
 template <typename T, typename OffsetT>
 void reduce(nvbench::state& state, nvbench::type_list<T, OffsetT>)
 {
-  using offset_t = cub::detail::choose_offset_t<OffsetT>;
-  using init_t   = T;
+  using init_t = T;
 
   // Retrieve axis parameters
-  const auto elements = static_cast<offset_t>(state.get_int64("Elements{io}"));
+  const auto elements = static_cast<std::size_t>(state.get_int64("Elements{io}"));
 
   thrust::device_vector<T> in = generate(elements);
   thrust::device_vector<T> out(1);
@@ -52,61 +48,18 @@ void reduce(nvbench::state& state, nvbench::type_list<T, OffsetT>)
   // it to I8. This skews the MemBoundScaling, leading to 20% regression for the same tuning when the public API is
   // called (with accum_t I32) over the benchmark (forced accum_t of I8). See also:
   // https://github.com/NVIDIA/cccl/issues/6576
-#if 0
-  auto mr = cuda::device_default_memory_pool(cuda::devices[0]);
+  caching_allocator_t alloc;
   state.exec(nvbench::exec_tag::gpu | nvbench::exec_tag::no_batch, [&](nvbench::launch& launch) {
-    auto env = ::cuda::std::execution::env{
-      ::cuda::stream_ref{launch.get_stream().get_stream()},
-      mr
-#  if !TUNE_BASE
-      ,
-      ::cuda::execution::tune(policy_selector<T>{})
-#  endif
-    };
-    static_assert(::cuda::std::execution::__queryable_with<decltype(env), ::cuda::mr::__get_memory_resource_t>);
-    (void) cub::DeviceReduce::Reduce(d_in, d_out, elements, op_t{}, init_t{}, env);
-  });
-#endif
-
-  // So for now, we have to call into the dispatcher again to override the accumulator type:
-  auto transform_op = ::cuda::std::identity{};
-
-  std::size_t temp_size;
-  cub::detail::reduce::dispatch</* OverrideAccumT = */ T>(
-    nullptr,
-    temp_size,
-    d_in,
-    d_out,
-    elements,
-    op_t{},
-    init_t{},
-    nullptr /* stream */,
-    transform_op
-#if !TUNE_BASE
-    ,
-    policy_selector<T>{}
-#endif
-  );
-
-  thrust::device_vector<nvbench::uint8_t> temp(temp_size, thrust::no_init);
-  auto* temp_storage = thrust::raw_pointer_cast(temp.data());
-
-  state.exec(nvbench::exec_tag::gpu | nvbench::exec_tag::no_batch, [&](nvbench::launch& launch) {
-    cub::detail::reduce::dispatch</* OverrideAccumT = */ T>(
-      temp_storage,
-      temp_size,
-      d_in,
-      d_out,
-      elements,
-      op_t{},
-      init_t{},
-      launch.get_stream(),
-      transform_op
+    auto env = cub_bench_env(
+      alloc,
+      launch
 #if !TUNE_BASE
       ,
-      policy_selector<T>{}
-#endif
+      cuda::execution::tune(policy_selector<T>{})
+#endif // !TUNE_BASE
     );
+    _CCCL_TRY_CUDA_API(
+      cub::DeviceReduce::Reduce, "Reduce failed", d_in, d_out, static_cast<OffsetT>(elements), op_t{}, init_t{}, env);
   });
 }
 
