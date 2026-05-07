@@ -89,7 +89,9 @@ inline constexpr bool is_non_deterministic_v =
 //! ====================================
 //!
 //! All non-ByKey algorithms in DeviceReduce that accept an environment can be tuned by passing a custom :ref:`policy
-//! selector <cub-policy-selectors>` that returns a @ref ReducePolicy, as shown in the example below:
+//! selector <cub-policy-selectors>` that returns a @ref ReducePolicy. This only applies to the default ``run_to_run``
+//! deterministic implementation, which is chosen when no determinism or the ``run_to_run`` determinism is specified
+//! through the environment. Here is an example:
 //!
 //!  .. literalinclude:: ../../../cub/test/catch2_test_device_reduce_env_api.cu
 //!      :language: c++
@@ -132,6 +134,15 @@ inline constexpr bool is_non_deterministic_v =
 //!      :dedent:
 //!      :start-after: example-begin reduce-deterministic-tuning
 //!      :end-before: example-end reduce-deterministic-tuning
+//!
+//! If the determinism is not fixed when calling a reduction API, multiple policy selectors for different determinism
+//! levels can be passed. The right policy selector is picked based on the requested determinism:
+//!
+//!  .. literalinclude:: ../../../cub/test/catch2_test_device_reduce_env_api.cu
+//!      :language: c++
+//!      :dedent:
+//!      :start-after: example-begin reduce-multi-deterministic-tuning
+//!      :end-before: example-end reduce-multi-deterministic-tuning
 //!
 //! @endrst
 struct DeviceReduce
