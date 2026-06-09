@@ -33,7 +33,7 @@ typedef struct cccl_device_reduce_build_result_t
   CUkernel single_tile_kernel;
   CUkernel single_tile_second_kernel;
   CUkernel reduction_kernel;
-  CUkernel nondeterministic_atomic_kernel;
+  CUkernel nondeterministic_atomic_kernel; // note: always null
   cccl_determinism_t determinism;
   void* runtime_policy;
 } cccl_device_reduce_build_result_t;

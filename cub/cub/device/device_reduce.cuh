@@ -143,11 +143,10 @@ private:
     }
     else if constexpr (Determinism == ::cuda::execution::determinism::__determinism_t::__not_guaranteed)
     {
-      using default_policy_selector =
-        detail::reduce_nondeterministic::policy_selector_from_types<accum_t, offset_t, ReductionOpT>;
+      using default_policy_selector = detail::reduce::policy_selector_from_types<accum_t, offset_t, ReductionOpT, true>;
       return detail::dispatch_with_env_and_tuning<default_policy_selector>(
         env, [&](auto policy_selector, void* storage, size_t& bytes, cudaStream_t stream) {
-          return detail::reduce_nondeterministic::dispatch<accum_t>(
+          return detail::reduce::dispatch<accum_t, true>(
             storage,
             bytes,
             d_in,
