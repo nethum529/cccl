@@ -53,14 +53,12 @@ std::string get_single_tile_kernel_name(
   std::string_view input_iterator_t,
   std::string_view output_iterator_t,
   std::string_view reduction_op_t,
-  cccl_value_t init,
+  std::string_view init_t,
   std::string_view accum_cpp_t,
   bool is_second_kernel)
 {
   std::string chained_policy_t;
   check(cccl_type_name_from_nvrtc<device_reduce_policy>(&chained_policy_t));
-
-  const std::string init_t = cccl_type_enum_to_name(init.type.type);
 
   std::string offset_t;
   if (is_second_kernel)
@@ -87,10 +85,15 @@ std::string get_single_tile_kernel_name(
 }
 
 std::string get_device_reduce_kernel_name(
-  std::string_view reduction_op_t, std::string_view input_iterator_t, std::string_view accum_t, bool not_deterministic)
+  std::string_view reduction_op_t,
+  std::string_view input_iterator_t,
+  std::string_view output_iterator_t,
+  std::string_view accum_t,
+  std::string_view init_t,
+  bool not_deterministic)
 {
-  std::string chained_policy_t;
-  check(cccl_type_name_from_nvrtc<device_reduce_policy>(&chained_policy_t));
+  std::string policy_selector_t;
+  check(cccl_type_name_from_nvrtc<device_reduce_policy>(&policy_selector_t));
 
   std::string offset_t;
   check(cccl_type_name_from_nvrtc<OffsetT>(&offset_t));
@@ -99,13 +102,15 @@ std::string get_device_reduce_kernel_name(
   check(cccl_type_name_from_nvrtc<cuda::std::identity>(&transform_op_t));
 
   return std::format(
-    "cub::detail::reduce::DeviceReduceKernel<{0}, {1}, {2}, {3}, {4}, {5}, {6}>",
-    chained_policy_t,
+    "cub::detail::reduce::DeviceReduceKernel<{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}>",
+    policy_selector_t,
     not_deterministic ? "true" : "false",
     input_iterator_t,
+    not_deterministic ? output_iterator_t : std::string(accum_t) + "*",
     offset_t,
     reduction_op_t,
     accum_t,
+    init_t,
     transform_op_t);
 }
 
@@ -190,6 +195,7 @@ try
     template_id<binary_user_operation_traits>(), op, accum_t, accum_t, accum_t);
 
   const auto offset_t = cccl_type_enum_to_name(cccl_type_enum::CCCL_UINT64);
+  const auto init_t   = cccl_type_enum_to_name(init.type.type);
 
   const auto policy_sel = [&] {
     using namespace cub::detail;
@@ -215,10 +221,10 @@ struct __align__({2}) storage_t {{
 {3}
 {4}
 {5}
-using device_reduce_policy = cub::detail::reduce::policy_selector_from_types<{6}, {7}, {8}>;
+using device_reduce_policy = cub::detail::reduce::policy_selector_from_types<{6}, {7}, {8}, {9}>;
 using namespace cub;
 using namespace cub::detail::reduce;
-static_assert(device_reduce_policy()(detail::current_tuning_cc()) == {9},
+static_assert(device_reduce_policy()(detail::current_tuning_cc()) == {10},
               "Host generated and JIT compiled reduce policy mismatch");
 )XXX",
     jit_template_header_contents, // 0
@@ -230,7 +236,8 @@ static_assert(device_reduce_policy()(detail::current_tuning_cc()) == {9},
     accum_cpp, // 6
     offset_t, // 7
     op_name, // 8
-    policy_sel_str.view()); // 9
+    determinism == CCCL_NOT_GUARANTEED, // 9
+    policy_sel_str.view()); // 10
 
 #if false // CCCL_DEBUGGING_SWITCH
   fflush(stderr);
@@ -239,11 +246,11 @@ static_assert(device_reduce_policy()(detail::current_tuning_cc()) == {9},
 #endif
 
   std::string single_tile_kernel_name =
-    reduce::get_single_tile_kernel_name(input_iterator_name, output_iterator_name, op_name, init, accum_cpp, false);
+    reduce::get_single_tile_kernel_name(input_iterator_name, output_iterator_name, op_name, init_t, accum_cpp, false);
   std::string single_tile_second_kernel_name = reduce::get_single_tile_kernel_name(
-    cccl_type_enum_to_name(accum_t.type, true), output_iterator_name, op_name, init, accum_cpp, true);
-  std::string reduction_kernel_name =
-    reduce::get_device_reduce_kernel_name(op_name, input_iterator_name, accum_cpp, determinism == CCCL_NOT_GUARANTEED);
+    cccl_type_enum_to_name(accum_t.type, true), output_iterator_name, op_name, init_t, accum_cpp, true);
+  std::string reduction_kernel_name = reduce::get_device_reduce_kernel_name(
+    op_name, input_iterator_name, output_iterator_name, accum_cpp, init_t, determinism == CCCL_NOT_GUARANTEED);
   std::string single_tile_kernel_lowered_name;
   std::string single_tile_second_kernel_lowered_name;
   std::string reduction_kernel_lowered_name;
