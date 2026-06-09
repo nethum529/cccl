@@ -94,6 +94,11 @@ struct DeviceReduceKernelSource
   {
     return sizeof(AccumT);
   }
+
+  CUB_RUNTIME_FUNCTION static constexpr size_t InitSize()
+  {
+    return sizeof(InitValueT);
+  }
 };
 
 // TODO(bgruber): remove in CCCL 4.0
@@ -582,6 +587,16 @@ using DispatchTransformReduce =
 
 namespace detail::reduce
 {
+// Retrieves a device pointer from a pointer-to-pointer.
+//
+// For CCCL.C's indirect_arg_t: ptr holds the address of the device pointer (&it.state).
+// For regular C++ pointers: the caller passes &device_ptr directly.
+// In both cases, dereferencing yields the actual device pointer.
+CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE void* get_device_ptr(void* ptr)
+{
+  return *reinterpret_cast<void**>(ptr);
+}
+
 template <bool UseAtomics,
           typename AccumT,
           typename InputIteratorT,
@@ -665,9 +680,9 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
   }
 
   // Get grid size for device_reduce_sweep_kernel
-  const int reduce_grid_size = even_share.grid_size;
+  const int reduce_grid_size = UseAtomics ? ::cuda::std::max(1, even_share.grid_size) : even_share.grid_size;
 
-// Log device_reduce_sweep_kernel configuration
+  // Log device_reduce_sweep_kernel configuration
 #ifdef CUB_DEBUG_LOG
   _CubLog("Invoking DeviceReduceKernel<<<%lu, %d, 0, %lld>>>(), %d items "
           "per thread, %d SM occupancy\n",
@@ -681,14 +696,24 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
   // Invoke DeviceReduceKernel
   if (const auto error = CubDebug(
         launcher_factory(reduce_grid_size, active_policy.reduce.threads_per_block, 0, stream)
-          .doit(kernel_source.ReductionKernel(),
-                d_in,
-                d_block_reductions,
-                num_items,
-                even_share,
-                reduction_op,
-                init,
-                transform_op)))
+          .doit(
+            kernel_source.ReductionKernel(),
+            d_in,
+            [&] {
+              if constexpr (UseAtomics)
+              {
+                return d_out;
+              }
+              else
+              {
+                return d_block_reductions;
+              }
+            }(),
+            num_items,
+            even_share,
+            reduction_op,
+            init,
+            transform_op)))
   {
     return error;
   }
