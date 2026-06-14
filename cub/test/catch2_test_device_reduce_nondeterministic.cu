@@ -3,7 +3,7 @@
 
 #include "insert_nested_NVTX_range_guard.h"
 
-#include <cub/device/dispatch/dispatch_reduce_nondeterministic.cuh>
+#include <cub/device/dispatch/dispatch_reduce.cuh>
 #include <cub/util_type.cuh>
 
 #include <thrust/device_vector.h>
