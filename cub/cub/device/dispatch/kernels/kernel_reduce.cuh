@@ -173,7 +173,7 @@ __launch_bounds__(int(current_policy<PolicySelector>().reduce.threads_per_block)
     static_assert(detail::is_cuda_std_plus_v<ReductionOpT>,
                   "Only plus is currently supported in nondeterministic reduce");
 
-    // The atomic kernel already finishes in this kernel, so check if we have an empty problem and handle it
+    // The atomic code path already finishes in this kernel, so check if we have an empty problem and handle it
     if (num_items == 0)
     {
       if (threadIdx.x == 0)
