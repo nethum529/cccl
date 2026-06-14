@@ -194,6 +194,7 @@ __launch_bounds__(int(current_policy<PolicySelector>().reduce.threads_per_block)
                       policy.block_algorithm,
                       policy.load_modifier,
                       NoScaling<policy.threads_per_block, policy.items_per_thread, AccumT>>;
+
   // Thread block type for reducing input tiles
   using AgentReduceT = AgentReduce<agent_policy_t, InputIteratorT, OffsetT, ReductionOpT, AccumT, TransformOpT>;
 
