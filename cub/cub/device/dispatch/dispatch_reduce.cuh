@@ -68,12 +68,15 @@ struct DeviceReduceKernelSource
                                  AccumT,
                                  TransformOpT>)
 
+  // The atomic code path finishes in one kernel, the two-phase code path writes to an intermediate buffer of
+  // accumulators
+  using reduce_kernel_output_t = ::cuda::std::conditional_t<UseAtomics, OutputIteratorT, AccumT*>;
   CUB_DEFINE_KERNEL_GETTER(
     ReductionKernel,
     DeviceReduceKernel<PolicySelector,
                        UseAtomics,
                        InputIteratorT,
-                       ::cuda::std::conditional_t<UseAtomics, OutputIteratorT, AccumT*>,
+                       reduce_kernel_output_t,
                        OffsetT,
                        ReductionOpT,
                        AccumT,
@@ -644,7 +647,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
   GridEvenShare<OffsetT> even_share;
   even_share.DispatchInit(num_items, max_blocks, tile_size);
 
-  AccumT* d_block_reductions = nullptr; // per block aggregate when not using the atomic kernel
+  AccumT* d_block_reductions = nullptr; // buffer for per-block aggregates for the two-phase code path
   if constexpr (UseAtomics)
   {
     if (const auto error =
@@ -679,10 +682,15 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
     d_block_reductions = static_cast<AccumT*>(allocations[0]);
   }
 
-  // Get grid size for device_reduce_sweep_kernel
-  const int reduce_grid_size = UseAtomics ? ::cuda::std::max(1, even_share.grid_size) : even_share.grid_size;
+  // The grid size for DeviceReduceKernel can be zero if the input size is zero. Since the atomic code path does not run
+  // a second kernel, we need to handle the empty grid in first kernel already
+  int reduce_grid_size = even_share.grid_size;
+  if constexpr (UseAtomics)
+  {
+    reduce_grid_size = ::cuda::std::max(1, reduce_grid_size);
+  }
 
-  // Log device_reduce_sweep_kernel configuration
+// Log device_reduce_sweep_kernel configuration
 #ifdef CUB_DEBUG_LOG
   _CubLog("Invoking DeviceReduceKernel<<<%lu, %d, 0, %lld>>>(), %d items "
           "per thread, %d SM occupancy\n",
@@ -694,26 +702,26 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
 #endif // CUB_DEBUG_LOG
 
   // Invoke DeviceReduceKernel
+  auto reduce_kernel_output = [&] {
+    if constexpr (UseAtomics)
+    {
+      return d_out;
+    }
+    else
+    {
+      return d_block_reductions;
+    }
+  }();
   if (const auto error = CubDebug(
         launcher_factory(reduce_grid_size, active_policy.reduce.threads_per_block, 0, stream)
-          .doit(
-            kernel_source.ReductionKernel(),
-            d_in,
-            [&] {
-              if constexpr (UseAtomics)
-              {
-                return d_out;
-              }
-              else
-              {
-                return d_block_reductions;
-              }
-            }(),
-            num_items,
-            even_share,
-            reduction_op,
-            init,
-            transform_op)))
+          .doit(kernel_source.ReductionKernel(),
+                d_in,
+                reduce_kernel_output,
+                num_items,
+                even_share,
+                reduction_op,
+                init,
+                transform_op)))
   {
     return error;
   }
@@ -730,7 +738,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
     return error;
   }
 
-  if (!UseAtomics)
+  if constexpr (!UseAtomics)
   {
     // Log single_reduce_sweep_kernel configuration
 #ifdef CUB_DEBUG_LOG
@@ -772,7 +780,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
 }
 
 // select the accumulator type using an overload set, so __accumulator_t and invoke_result_t are not instantiated when
-// an overriding accumulator type is present. This is needed by CCCL.C, using void as accumulator type.
+// an overriding accumulator type is present. This is needed by CCCL.C, which uses void as accumulator type.
 template <typename InputIteratorT,
           typename InitValueT,
           typename ReductionOpT,
@@ -853,7 +861,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE auto dispatch(
       num_items
       <= static_cast<OffsetT>(active_policy.single_tile.threads_per_block * active_policy.single_tile.items_per_thread);
 
-    // If we use the atomic kernel or have a problem size that fits into a single tile, we don't need any temp storage
+    // If we use the atomic code path or have a problem size that fits into a single tile, we don't need temp storage
     if (UseAtomics || single_tile_problem)
     {
       // Return if the caller is simply requesting the size of the storage allocation
