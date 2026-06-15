@@ -343,7 +343,7 @@ struct policy_selector
   op_kind_t operation_t;
   int offset_size;
   int accum_size;
-  bool use_atomic_kernel = false;
+  bool stable_reduction_order = true;
 
   [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_two_phase_tuning(::cuda::compute_capability cc) const
     -> reduce_policy
@@ -387,7 +387,7 @@ struct policy_selector
   [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto operator()(::cuda::compute_capability cc) const -> reduce_policy
   {
     auto policy = get_two_phase_tuning(cc);
-    if (use_atomic_kernel)
+    if (!stable_reduction_order)
     {
       policy.reduce.block_algorithm = BLOCK_REDUCE_WARP_REDUCTIONS_NONDETERMINISTIC;
     }
@@ -399,13 +399,13 @@ static_assert(reduce_policy_selector<policy_selector>);
 #endif // _CCCL_HAS_CONCEPTS()
 
 // stateless version which can be passed to kernels
-template <typename AccumT, typename OffsetT, typename ReductionOpT, bool UseAtomics = false>
+template <typename AccumT, typename OffsetT, typename ReductionOpT, bool StableReductionOrder = true>
 struct policy_selector_from_types
 {
   [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto operator()(::cuda::compute_capability cc) const -> reduce_policy
   {
     constexpr auto policies = policy_selector{
-      classify_type<AccumT>, classify_op<ReductionOpT>, int{sizeof(OffsetT)}, int{sizeof(AccumT)}, UseAtomics};
+      classify_type<AccumT>, classify_op<ReductionOpT>, int{sizeof(OffsetT)}, int{sizeof(AccumT)}, StableReductionOrder};
     return policies(cc);
   }
 };

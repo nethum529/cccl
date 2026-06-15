@@ -139,7 +139,7 @@ finalize_and_store_aggregate(OutputIteratorT d_out, ReductionOpT, no_init_t, Acc
  *   Binary reduction functor
  */
 template <typename PolicySelector,
-          bool UseAtomics,
+          bool StableReductionOrder,
           typename InputIteratorT,
           typename OutputIteratorT,
           typename OffsetT,
@@ -161,7 +161,7 @@ __launch_bounds__(int(current_policy<PolicySelector>().reduce.threads_per_block)
   TransformOpT transform_op)
 {
   static constexpr agent_reduce_policy policy = current_policy<PolicySelector>().reduce;
-  if constexpr (UseAtomics)
+  if constexpr (!StableReductionOrder)
   {
     // todo: This static_assert fails with nvc++ CUDA compilation.
     NV_IF_ELSE_TARGET(
@@ -211,7 +211,11 @@ __launch_bounds__(int(current_policy<PolicySelector>().reduce.threads_per_block)
   // Output result, only thread 0 has valid value in block aggregate
   if (threadIdx.x == 0)
   {
-    if constexpr (UseAtomics)
+    if constexpr (StableReductionOrder)
+    {
+      detail::uninitialized_copy_single(d_out + blockIdx.x, block_aggregate);
+    }
+    else
     {
       // TODO: replace this with other atomic operations when specified
       NV_IF_ELSE_TARGET(
@@ -222,10 +226,6 @@ __launch_bounds__(int(current_policy<PolicySelector>().reduce.threads_per_block)
                                   ::cuda::memory_order_relaxed);
         }),
         (atomicAdd(&d_out[0], blockIdx.x == 0 ? reduction_op(init, block_aggregate) : block_aggregate);));
-    }
-    else
-    {
-      detail::uninitialized_copy_single(d_out + blockIdx.x, block_aggregate);
     }
   }
 }

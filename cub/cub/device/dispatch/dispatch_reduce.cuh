@@ -52,7 +52,7 @@ template <typename PolicySelector,
           typename InitValueT,
           typename AccumT,
           typename TransformOpT,
-          bool UseAtomics = false>
+          bool StableReductionOrder = true>
 struct DeviceReduceKernelSource
 {
   // PolicySelector must be stateless, so we can pass the type to the kernel
@@ -71,11 +71,11 @@ struct DeviceReduceKernelSource
 
   // The atomic code path finishes in one kernel, the two-phase code path writes to an intermediate buffer of
   // accumulators
-  using reduce_kernel_output_t = ::cuda::std::conditional_t<UseAtomics, OutputIteratorT, AccumT*>;
+  using reduce_kernel_output_t = ::cuda::std::conditional_t<StableReductionOrder, AccumT*, OutputIteratorT>;
   CUB_DEFINE_KERNEL_GETTER(
     ReductionKernel,
     DeviceReduceKernel<PolicySelector,
-                       UseAtomics,
+                       StableReductionOrder,
                        InputIteratorT,
                        reduce_kernel_output_t,
                        OffsetT,
@@ -601,7 +601,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE void* get_device_ptr(void* ptr)
   return *reinterpret_cast<void**>(ptr);
 }
 
-template <bool UseAtomics,
+template <bool StableReductionOrder,
           typename AccumT,
           typename InputIteratorT,
           typename OutputIteratorT,
@@ -649,7 +649,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
   even_share.DispatchInit(num_items, max_blocks, tile_size);
 
   AccumT* d_block_reductions = nullptr; // buffer for per-block aggregates for the two-phase code path
-  if constexpr (UseAtomics)
+  if constexpr (!StableReductionOrder)
   {
     if (const auto error =
           CubDebug(launcher_factory.MemsetAsync(get_device_ptr(&d_out), 0, kernel_source.InitSize(), stream)))
@@ -686,7 +686,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
   // The grid size for DeviceReduceKernel can be zero if the input size is zero. Since the atomic code path does not run
   // a second kernel, we need to handle the empty grid in first kernel already
   int reduce_grid_size = even_share.grid_size;
-  if constexpr (UseAtomics)
+  if constexpr (!StableReductionOrder)
   {
     reduce_grid_size = ::cuda::std::max(1, reduce_grid_size);
   }
@@ -704,7 +704,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
 
   // Invoke DeviceReduceKernel
   auto reduce_kernel_output = [&] {
-    if constexpr (UseAtomics)
+    if constexpr (!StableReductionOrder)
     {
       return d_out;
     }
@@ -739,7 +739,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE cudaError_t invoke_regular_size_reduce(
     return error;
   }
 
-  if constexpr (!UseAtomics)
+  if constexpr (StableReductionOrder)
   {
     // Log single_reduce_sweep_kernel configuration
 #ifdef CUB_DEBUG_LOG
@@ -800,8 +800,8 @@ template <typename InputIteratorT,
           ::cuda::std::enable_if_t<!::cuda::std::is_same_v<OverrideAccumT, use_default>, int> = 0>
 _CCCL_HOST_DEVICE_API auto select_accum_t(OverrideAccumT*) -> OverrideAccumT;
 
-template <typename OverrideAccumT = use_default,
-          bool UseAtomics         = false,
+template <typename OverrideAccumT   = use_default,
+          bool StableReductionOrder = true,
           typename InputIteratorT,
           typename OutputIteratorT,
           typename OffsetT,
@@ -810,7 +810,7 @@ template <typename OverrideAccumT = use_default,
           typename TransformOpT   = ::cuda::std::identity,
           typename AccumT         = decltype(select_accum_t<InputIteratorT, InitValueT, ReductionOpT, TransformOpT>(
             static_cast<OverrideAccumT*>(nullptr))),
-          typename PolicySelector = policy_selector_from_types<AccumT, OffsetT, ReductionOpT, UseAtomics>,
+          typename PolicySelector = policy_selector_from_types<AccumT, OffsetT, ReductionOpT, StableReductionOrder>,
           typename KernelSource   = DeviceReduceKernelSource<
               PolicySelector,
               InputIteratorT,
@@ -820,7 +820,7 @@ template <typename OverrideAccumT = use_default,
               InitValueT,
               AccumT,
               TransformOpT,
-              UseAtomics>,
+              StableReductionOrder>,
           typename KernelLauncherFactory = CUB_DETAIL_DEFAULT_KERNEL_LAUNCHER_FACTORY>
 #if _CCCL_HAS_CONCEPTS()
   requires reduce_policy_selector<PolicySelector>
@@ -847,6 +847,19 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE auto dispatch(
 
   return dispatch_compute_cap(policy_selector, cc, [&](auto policy_getter) {
     CUB_DETAIL_CONSTEXPR_ISH const reduce_policy active_policy = policy_getter();
+
+    // known operators for integers are stable, even when using a non-deterministic reduction order
+    if constexpr (StableReductionOrder
+                  && (!::cuda::std::is_integral_v<AccumT> || !is_cuda_binary_operator<ReductionOpT>) )
+    {
+      CUB_DETAIL_STATIC_ISH_ASSERT(
+        active_policy.reduce.block_algorithm != BLOCK_REDUCE_WARP_REDUCTIONS_NONDETERMINISTIC,
+        "A run-to-run deterministic reduction must not use a non-deterministic block_algorithm");
+      CUB_DETAIL_STATIC_ISH_ASSERT(
+        active_policy.single_tile.block_algorithm != BLOCK_REDUCE_WARP_REDUCTIONS_NONDETERMINISTIC,
+        "A run-to-run deterministic reduction must not use a non-deterministic block_algorithm");
+    }
+
 #if _CCCL_HOSTED() && defined(CUB_DEBUG_LOG)
     NV_IF_TARGET(NV_IS_HOST, ({
                    std::stringstream ss;
@@ -863,7 +876,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE auto dispatch(
       <= static_cast<OffsetT>(active_policy.single_tile.threads_per_block * active_policy.single_tile.items_per_thread);
 
     // If we use the atomic code path or have a problem size that fits into a single tile, we don't need temp storage
-    if (UseAtomics || single_tile_problem)
+    if (!StableReductionOrder || single_tile_problem)
     {
       // Return if the caller is simply requesting the size of the storage allocation
       if (d_temp_storage == nullptr)
@@ -873,7 +886,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE auto dispatch(
       }
     }
 
-    if constexpr (!UseAtomics)
+    if constexpr (StableReductionOrder)
     {
       // if the problem is small enough to fit into a single tile, just handle it and return early
       if (single_tile_problem)
@@ -911,7 +924,7 @@ CUB_RUNTIME_FUNCTION _CCCL_FORCEINLINE auto dispatch(
     }
 
     // Regular size
-    return invoke_regular_size_reduce<UseAtomics, AccumT>(
+    return invoke_regular_size_reduce<StableReductionOrder, AccumT>(
       d_temp_storage,
       temp_storage_bytes,
       d_in,
