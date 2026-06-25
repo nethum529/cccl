@@ -99,7 +99,13 @@ int main()
 
   for (int iter = 0; iter < NITER; iter++)
   {
-    ctx.parallel_for(blocked_partition(), where, handle_X.shape(), handle_X.rw(), handle_Y.read())
+    // Probe green-context grid execution independently from composite VMM mappings.
+    ctx.parallel_for(
+      blocked_partition(),
+      where,
+      handle_X.shape(),
+      handle_X.rw(data_place::managed()),
+      handle_Y.read(data_place::managed()))
         ->*[] __device__(size_t i, auto x, auto y) {
               x(i) += y(i);
             };
