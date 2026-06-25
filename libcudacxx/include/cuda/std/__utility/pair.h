@@ -72,6 +72,7 @@ template <class _UPair, class _T1, class _T2>
 [[nodiscard]] _CCCL_API _CCCL_CONSTEVAL __select_constructor __pair_select_pair_like_constructible() noexcept
 {
   using ::cuda::std::get;
+  // NOLINTBEGIN(bugprone-branch-clone)
   if constexpr (__is_cuda_std_ranges_subrange_v<remove_cvref_t<_UPair>>)
   { // [pairs#pair]-15.1: remove_cvref_t<UTuple> is not a specialization of ranges​::​subrange,
     return __select_constructor::__none;
@@ -96,6 +97,7 @@ template <class _UPair, class _T1, class _T2>
            ? __select_constructor::__implicit
            : __select_constructor::__explicit;
   }
+  // NOLINTEND(bugprone-branch-clone)
 }
 
 template <class _UPair, class _T1, class _T2>
