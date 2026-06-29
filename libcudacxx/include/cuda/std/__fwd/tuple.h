@@ -37,9 +37,6 @@ template <class...>
 class _CCCL_TYPE_VISIBILITY_DEFAULT tuple;
 
 template <class>
-inline constexpr bool __is_tuple_of_iterator_references_v = false;
-
-template <class>
 inline constexpr bool __is_cuda_std_tuple = false;
 
 template <class... _Types>
