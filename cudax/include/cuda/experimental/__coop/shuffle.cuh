@@ -47,11 +47,11 @@ _CCCL_REQUIRES(is_group<_Group> _CCCL_AND ::cuda::std::is_same_v<typename _Group
   using _MappingResult         = typename _Group::__mapping_result_type;
   const auto& __mapping_result = __group.__mapping_result();
 
-  _CCCL_ASSERT(__src_rank < __mapping_result.count(),
+  _CCCL_ASSERT(__src_rank < __mapping_result.unit_count(),
                "invalid __src_rank - must be less than the number of units within the group");
 
   const auto __lane_mask   = __mapping_result.lane_mask();
-  const auto __lane_offset = static_cast<int>(__src_rank) - static_cast<int>(__mapping_result.rank());
+  const auto __lane_offset = static_cast<int>(__src_rank) - static_cast<int>(__mapping_result.unit_rank());
 
   unsigned __src_lane{};
   if constexpr (_MappingResult::is_always_contiguous())

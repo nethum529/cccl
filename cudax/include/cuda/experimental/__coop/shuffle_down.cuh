@@ -50,7 +50,7 @@ __shuffle_down_impl(const _Group& __group, const _Tp& __value, unsigned __offset
   const auto& __mapping_result = __group.__mapping_result();
 
   const auto __lane_mask       = __mapping_result.lane_mask();
-  const auto __offset_is_valid = (__offset < __mapping_result.count() - __mapping_result.rank());
+  const auto __offset_is_valid = (__offset < __mapping_result.unit_count() - __mapping_result.unit_rank());
 
   if constexpr (_MappingResult::is_always_contiguous())
   {

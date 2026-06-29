@@ -51,7 +51,7 @@ __shuffle_up_impl(const _Group& __group, const _Tp& __value, unsigned __offset) 
   const auto& __mapping_result = __group.__mapping_result();
 
   const auto __lane_mask               = __mapping_result.lane_mask();
-  const auto [__src_rank, __underflow] = ::cuda::sub_overflow(__mapping_result.rank(), __offset);
+  const auto [__src_rank, __underflow] = ::cuda::sub_overflow(__mapping_result.unit_rank(), __offset);
   const auto __offset_is_valid         = !__underflow;
 
   if constexpr (_MappingResult::is_always_contiguous())
